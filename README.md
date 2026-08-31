@@ -1,8 +1,8 @@
-# ReadOut
+# Narrately
 
 Free, instant text-to-speech in the browser. Paste a link or any text, pick a voice, and listen — no accounts, no paywall, no tracking.
 
-Live at [narrately.net](https://narrately.net) (and at abbasameli.github.io while DNS propagates).
+Live at [narrately.net](https://narrately.net).
 
 ## What it is
 
