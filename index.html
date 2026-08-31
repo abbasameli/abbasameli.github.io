@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ReadOut — Paste a link or text. Listen.</title>
+<meta name="description" content="Free instant text-to-speech. Paste any article link or text and listen. No sign-up, no paywall.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔊</text></svg>">
+<style>
+  :root{
+    --bg:#faf8f4; --card:#ffffff; --ink:#1c1917; --muted:#78716c;
+    --accent:#c2410c; --accent-soft:#ffedd5; --line:#e7e2da; --ok:#15803d; --err:#b91c1c;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.5; min-height:100vh; display:flex; flex-direction:column;
+  }
+  header{padding:28px 20px 10px; text-align:center;}
+  .logo{font-family:Georgia,"Times New Roman",serif; font-size:34px; font-weight:700; letter-spacing:-0.5px;}
+  .logo span{color:var(--accent);}
+  .tagline{color:var(--muted); font-size:15px; margin-top:4px;}
+  main{flex:1; display:flex; justify-content:center; padding:18px 14px 30px;}
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:16px;
+    box-shadow:0 6px 24px rgba(28,25,23,.06);
+    width:100%; max-width:720px; padding:26px 24px 24px;
+  }
+  .tabs{display:flex; gap:8px; margin-bottom:18px;}
+  .tab{
+    flex:1; padding:11px 10px; border-radius:10px; border:1px solid var(--line);
+    background:#f5f3ee; color:var(--muted); font-size:15px; font-weight:600; cursor:pointer;
+  }
+  .tab.active{background:var(--accent-soft); border-color:var(--accent); color:var(--accent);}
+  .pane.hidden{display:none;}
+  input[type=url], textarea{
+    width:100%; border:1px solid var(--line); border-radius:10px; padding:12px 14px;
+    font-size:15px; font-family:inherit; color:var(--ink); background:#fff;
+  }
+  input[type=url]:focus, textarea:focus{outline:2px solid var(--accent-soft); border-color:var(--accent);}
+  textarea{min-height:170px; resize:vertical;}
+  .row{display:flex; gap:10px; margin-top:10px; align-items:center; flex-wrap:wrap;}
+  .btn{
+    border:none; border-radius:10px; padding:11px 18px; font-size:15px; font-weight:600; cursor:pointer;
+    background:#f5f3ee; color:var(--ink); border:1px solid var(--line);
+  }
+  .btn:hover{background:#ede9e2;}
+  .btn.primary{background:var(--accent); color:#fff; border-color:var(--accent);}
+  .btn.primary:hover{background:#a3360a;}
+  .btn.big{padding:14px 26px; font-size:17px;}
+  .btn:disabled{opacity:.5; cursor:not-allowed;}
+  .status{font-size:14px; margin-top:10px; min-height:20px; color:var(--muted);}
+  .status.err{color:var(--err);}
+  .status.ok{color:var(--ok);}
+  .meta{font-size:13.5px; color:var(--muted); margin-top:8px;}
+  .preview{
+    display:none; margin-top:14px; padding:14px; border:1px solid var(--line);
+    border-radius:10px; background:#fcfbf8;
+  }
+  .preview.show{display:block;}
+  .preview h3{font-size:16px; font-family:Georgia,serif; margin-bottom:6px;}
+  .preview p{font-size:13.5px; color:var(--muted);}
+  .section-label{font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin:22px 0 8px;}
+  .voices{display:grid; grid-template-columns:repeat(3,1fr); gap:10px;}
+  @media(max-width:560px){.voices{grid-template-columns:1fr;}}
+  .vcard{
+    border:1px solid var(--line); border-radius:12px; padding:12px 14px; cursor:pointer; background:#fff;
+    transition:border-color .15s, background .15s;
+  }
+  .vcard:hover{border-color:#d6cfc4;}
+  .vcard.sel{border-color:var(--accent); background:var(--accent-soft);}
+  .vcard .vname{font-weight:700; font-size:15px;}
+  .vcard .vsub{font-size:12.5px; color:var(--muted); margin-top:2px; word-break:break-word;}
+  .vcard .vtest{
+    margin-top:8px; font-size:13px; font-weight:600; color:var(--accent);
+    background:none; border:none; padding:0; cursor:pointer;
+  }
+  .controls{display:flex; gap:10px; align-items:center; margin-top:22px; flex-wrap:wrap;}
+  select{
+    border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:14.5px;
+    font-family:inherit; background:#fff; color:var(--ink);
+  }
+  .progress{height:8px; background:#efece6; border-radius:99px; margin-top:18px; overflow:hidden;}
+  .progress > div{height:100%; width:0%; background:var(--accent); border-radius:99px; transition:width .25s;}
+  .proglabel{font-size:12.5px; color:var(--muted); margin-top:6px; min-height:18px;}
+  .now{
+    font-size:13.5px; color:var(--muted); font-style:italic; margin-top:6px;
+    min-height:20px; border-left:3px solid var(--accent-soft); padding-left:10px;
+  }
+  .hint{font-size:13px; color:var(--muted); margin-top:16px;}
+  footer{text-align:center; color:var(--muted); font-size:13px; padding:18px 16px 26px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Read<span>Out</span></div>
+  <div class="tagline">Paste a link or any text. Pick a voice. Listen. That's it.</div>
+</header>
+
+<main>
+  <div class="card">
+
+    <div class="tabs">
+      <button class="tab active" id="tabUrl" type="button">🔗 Paste a link</button>
+      <button class="tab" id="tabText" type="button">📝 Paste text</button>
+    </div>
+
+    <div class="pane" id="paneUrl">
+      <input type="url" id="urlInput" placeholder="https://example.com/some-article" autocomplete="off">
+      <div class="row">
+        <button class="btn primary" id="fetchBtn" type="button">Fetch article</button>
+      </div>
+      <div class="status" id="status"></div>
+      <div class="preview" id="preview">
+        <h3 id="previewTitle"></h3>
+        <p id="previewSnippet"></p>
+      </div>
+    </div>
+
+    <div class="pane hidden" id="paneText">
+      <textarea id="textInput" placeholder="Paste or type anything here — up to about a 15-minute read…"></textarea>
+      <div class="hint">Tip: press Ctrl+Enter (⌘+Enter on Mac) to start listening.</div>
+    </div>
+
+    <div class="meta" id="meta">Nothing loaded yet.</div>
+
+    <div class="section-label">Choose a voice</div>
+    <div class="voices" id="voiceRow"></div>
+
+    <div class="section-label">Speed</div>
+    <select id="rateSel">
+      <option value="0.75">0.75× — slow</option>
+      <option value="1" selected>1× — normal</option>
+      <option value="1.25">1.25× — brisk</option>
+      <option value="1.5">1.5× — fast</option>
+      <option value="2">2× — very fast</option>
+    </select>
+
+    <div class="controls">
+      <button class="btn primary big" id="playBtn" type="button">▶ Play</button>
+      <button class="btn" id="pauseBtn" type="button" disabled>⏸ Pause</button>
+      <button class="btn" id="stopBtn" type="button" disabled>⏹ Stop</button>
+    </div>
+
+    <div class="progress"><div id="progFill"></div></div>
+    <div class="proglabel" id="progLabel"></div>
+    <div class="now" id="now"></div>
+
+  </div>
+</main>
+
+<footer>
+  No accounts. No paywall. No tracking.<br>
+  Speech is generated by your own browser and device — nothing you paste is stored anywhere.
+</footer>
+
+<script>
+(function(){
+  "use strict";
+  var $ = function(s){ return document.querySelector(s); };
+
+  var tabUrl=$("#tabUrl"), tabText=$("#tabText"), paneUrl=$("#paneUrl"), paneText=$("#paneText");
+  var urlInput=$("#urlInput"), fetchBtn=$("#fetchBtn"), statusEl=$("#status");
+  var preview=$("#preview"), previewTitle=$("#previewTitle"), previewSnippet=$("#previewSnippet");
+  var textInput=$("#textInput"), metaEl=$("#meta"), voiceRow=$("#voiceRow"), rateSel=$("#rateSel");
+  var playBtn=$("#playBtn"), pauseBtn=$("#pauseBtn"), stopBtn=$("#stopBtn");
+  var progFill=$("#progFill"), progLabel=$("#progLabel"), nowEl=$("#now");
+
+  var sourceText = "";
+  var voiceOptions = [];
+  var sel = 0;
+  var player = { chunks: [], i: 0, playing: false, paused: false };
+
+  /* ---------- Tabs ---------- */
+  tabUrl.addEventListener("click", function(){ setTab(true); });
+  tabText.addEventListener("click", function(){ setTab(false); });
+  function setTab(urlMode){
+    tabUrl.classList.toggle("active", urlMode);
+    tabText.classList.toggle("active", !urlMode);
+    paneUrl.classList.toggle("hidden", !urlMode);
+    paneText.classList.toggle("hidden", urlMode);
+  }
+
+  /* ---------- Meta / estimate ---------- */
+  function updateMeta(){
+    var t = sourceText.trim();
+    if(!t){ metaEl.textContent = "Nothing loaded yet."; return; }
+    var words = t.split(/\s+/).filter(Boolean).length;
+    var mins = words / 160;
+    var msg = words.toLocaleString() + " words · about " + (mins < 1 ? "under a minute" : mins.toFixed(1) + " min") + " at normal speed";
+    if(mins > 15) msg += " — longer than 15 minutes, but it will still play";
+    metaEl.textContent = msg;
+  }
+
+  textInput.addEventListener("input", function(){
+    sourceText = textInput.value;
+    updateMeta();
+  });
+  textInput.addEventListener("keydown", function(e){
+    if((e.ctrlKey || e.metaKey) && e.key === "Enter"){ e.preventDefault(); startFromUI(); }
+  });
+
+  /* ---------- URL fetching ---------- */
+  fetchBtn.addEventListener("click", fetchAndLoad);
+  urlInput.addEventListener("keydown", function(e){ if(e.key === "Enter"){ e.preventDefault(); fetchAndLoad(); } });
+
+  function setStatus(msg, kind){
+    statusEl.textContent = msg || "";
+    statusEl.className = "status" + (kind ? " " + kind : "");
+  }
+
+  function fetchAndLoad(){
+    var raw = urlInput.value.trim();
+    if(!raw){ setStatus("Paste a link first.", "err"); return; }
+    var target = /^https?:\/\//i.test(raw) ? raw : "https://" + raw;
+    try { new URL(target); } catch(e){ setStatus("That doesn't look like a valid link.", "err"); return; }
+
+    fetchBtn.disabled = true;
+    setStatus("Fetching article — this can take up to 20 seconds…");
+    preview.classList.remove("show");
+
+    fetchArticleSmart(target).then(function(art){
+      sourceText = (art.title ? art.title + ". " : "") + art.text;
+      previewTitle.textContent = art.title || "Article loaded";
+      previewSnippet.textContent = art.text.slice(0, 220).trim() + "…";
+      preview.classList.add("show");
+      setStatus("Ready — pick a voice and press Play.", "ok");
+      updateMeta();
+      fetchBtn.disabled = false;
+    }).catch(function(){
+      setStatus("Couldn't fetch that page. Some major news sites (like the BBC) block automated readers — copy the article text into the “Paste text” tab and it will play from there.", "err");
+      fetchBtn.disabled = false;
+    });
+  }
+
+  /* Fetch with a hard timeout so a hung proxy fails fast and we try the next one. */
+  function timedFetch(url, ms){
+    return new Promise(function(resolve, reject){
+      var ctrl = ("AbortController" in window) ? new AbortController() : null;
+      var timer = setTimeout(function(){
+        if(ctrl) ctrl.abort();
+        reject(new Error("timeout"));
+      }, ms || 15000);
+      fetch(url, ctrl ? { signal: ctrl.signal } : {}).then(function(r){
+        clearTimeout(timer);
+        if(r.ok) resolve(r); else reject(new Error("http " + r.status));
+      }).catch(function(e){
+        clearTimeout(timer);
+        reject(e);
+      });
+    });
+  }
+
+  /*
+   * Fetch chain, in order of reliability for news/article pages:
+   * 1. Jina Reader — a free reader-proxy built for article extraction (returns clean text).
+   * 2-4. Generic CORS proxies returning raw HTML, which we then parse.
+   */
+  function fetchArticleSmart(target){
+    var attempts = [
+      function(){
+        return timedFetch("https://r.jina.ai/" + target, 25000)
+          .then(function(r){ return r.text(); })
+          .then(function(t){
+            var p = parseJina(t);
+            if(!p.text || p.text.length < 200) throw new Error("thin jina result");
+            return p;
+          });
+      },
+      function(){
+        return timedFetch("https://api.allorigins.win/get?url=" + encodeURIComponent(target), 15000)
+          .then(function(r){ return r.json(); })
+          .then(function(j){
+            if(!j || !j.contents) throw new Error("empty");
+            return requireText(extractArticle(j.contents));
+          });
+      },
+      function(){
+        return timedFetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(target), 15000)
+          .then(function(r){ return r.text(); })
+          .then(function(h){ return requireText(extractArticle(h)); });
+      },
+      function(){
+        return timedFetch("https://corsproxy.io/?url=" + encodeURIComponent(target), 15000)
+          .then(function(r){ return r.text(); })
+          .then(function(h){ return requireText(extractArticle(h)); });
+      },
+      function(){
+        return timedFetch("https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(target), 15000)
+          .then(function(r){ return r.text(); })
+          .then(function(h){ return requireText(extractArticle(h)); });
+      }
+    ];
+    var chain = Promise.reject(new Error("start"));
+    attempts.forEach(function(p){
+      chain = chain.catch(function(){ return p(); });
+    });
+    return chain;
+  }
+
+  function requireText(art){
+    if(!art || !art.text || art.text.length < 200) throw new Error("too little text");
+    return art;
+  }
+
+  /* Jina Reader returns markdown-ish text with "Title:" and "Markdown Content:" headers. */
+  function parseJina(md){
+    var title = "";
+    var tm = md.match(/^Title:\s*(.+)$/m);
+    if(tm) title = tm[1].trim();
+    var body = md;
+    var marker = "Markdown Content:";
+    var idx = md.indexOf(marker);
+    if(idx !== -1){
+      body = md.slice(idx + marker.length);
+    } else {
+      body = body.replace(/^Title:.*$/m, "").replace(/^URL Source:.*$/m, "");
+    }
+    body = body
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/\*([^*\n]+)\*/g, "$1")
+      .replace(/__([^_]+)__/g, "$1")
+      .replace(/^\s*>\s?/gm, "")
+      .replace(/^\s*[-*+]\s+/gm, "")
+      .replace(/^\s*\d+\.\s+/gm, "")
+      .replace(/`+/g, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n\s*\n\s*\n+/g, "\n\n")
+      .replace(/^\s+|\s+$/g, "");
+    return { title: title, text: body };
+  }
+
+  /* Extract readable article text from raw HTML. */
+  function extractArticle(html){
+    var doc = new DOMParser().parseFromString(html, "text/html");
+    var title = "";
+    var og = doc.querySelector('meta[property="og:title"]');
+    if(og && og.content) title = og.content.trim();
+    if(!title && doc.title) title = doc.title.trim();
+
+    doc.querySelectorAll("script,style,noscript,svg,iframe,form,button,select,header,footer,nav,aside,[role=banner],[role=navigation],[role=contentinfo]")
+      .forEach(function(el){ el.remove(); });
+
+    var root = doc.querySelector("article")
+            || doc.querySelector(".post-content")
+            || doc.querySelector(".body.markup")
+            || doc.querySelector("main")
+            || doc.querySelector("[role=main]")
+            || doc.body;
+
+    if(root){
+      root.querySelectorAll('[class*="cookie"],[class*="subscribe"],[class*="newsletter"],[class*="signup"],[class*="sign-up"],[class*="share"],[class*="related"],[class*="comment"],[class*="sidebar"],[class*="promo"],[class*="popup"],[class*="modal"],[class*="paywall"],[class*="nav"],[class*="menu"],[class*="footer"],[class*="header"],[class*="ad-"],[id*="comments"]')
+        .forEach(function(el){ el.remove(); });
+    }
+
+    var text = root ? root.textContent : "";
+    text = text.replace(/ /g, " ")
+               .replace(/[ \t]+/g, " ")
+               .replace(/\n\s*\n+/g, "\n\n")
+               .replace(/^\s+|\s+$/g, "");
+    return { title: title, text: text };
+  }
+
+  /* ---------- Voices ---------- */
+  function scoreVoice(v){
+    var s = 0, n = v.name || "";
+    if(/google/i.test(n)) s += 4;
+    if(/natural|neural|online/i.test(n)) s += 4;
+    if(/microsoft/i.test(n)) s += 2;
+    if(/samantha|aria|jenny|guy|zira|serena|daniel|karen|moira|tessa|alex|susan|kate|stephanie|siri|ava|sonia|libby/i.test(n)) s += 2;
+    if(v.localService) s += 1;
+    return s;
+  }
+
+  function buildVoices(){
+    if(!("speechSynthesis" in window)){
+      voiceRow.innerHTML = "<p style='grid-column:1/-1;color:#b91c1c;font-size:14px;'>Sorry — this browser doesn't support speech synthesis. Try Chrome, Edge, or Safari.</p>";
+      return;
+    }
+    var all = window.speechSynthesis.getVoices() || [];
+    var en = all.filter(function(v){ return /^en([-_]|$)/i.test(v.lang); });
+    var pool = (en.length ? en : all).slice().sort(function(a,b){ return scoreVoice(b) - scoreVoice(a); });
+    var seen = {}, picked = [];
+    for(var i = 0; i < pool.length && picked.length < 3; i++){
+      if(seen[pool[i].name]) continue;
+      seen[pool[i].name] = true;
+      picked.push(pool[i]);
+    }
+    voiceOptions = picked.map(function(v, i){
+      return { voice: v, pitch: 1, label: "Voice " + (i + 1), sub: v.name.replace(/^(Microsoft|Google)\s+/i, "") };
+    });
+    var pitches = [1, 0.85, 1.2];
+    var tones = ["natural tone", "deeper tone", "brighter tone"];
+    while(voiceOptions.length < 3){
+      var idx = voiceOptions.length;
+      var base = picked[0] || null;
+      voiceOptions.push({
+        voice: base, pitch: pitches[idx] || 1, label: "Voice " + (idx + 1),
+        sub: base ? base.name.replace(/^(Microsoft|Google)\s+/i, "") + " · " + tones[idx] : "Device default"
+      });
+    }
+    renderVoiceCards();
+  }
+
+  function renderVoiceCards(){
+    voiceRow.innerHTML = "";
+    voiceOptions.forEach(function(opt, i){
+      var card = document.createElement("div");
+      card.className = "vcard" + (i === sel ? " sel" : "");
+      var nm = document.createElement("div"); nm.className = "vname"; nm.textContent = opt.label;
+      var sb = document.createElement("div"); sb.className = "vsub"; sb.textContent = opt.sub;
+      var test = document.createElement("button"); test.className = "vtest"; test.type = "button"; test.textContent = "▶ Preview";
+      card.appendChild(nm); card.appendChild(sb); card.appendChild(test);
+      card.addEventListener("click", function(){ sel = i; renderVoiceCards(); });
+      test.addEventListener("click", function(e){
+        e.stopPropagation();
+        sel = i; renderVoiceCards(); previewVoice(i);
+      });
+      voiceRow.appendChild(card);
+    });
+  }
+
+  function previewVoice(i){
+    stopPlayback();
+    var u = new SpeechSynthesisUtterance("Hello — this is " + voiceOptions[i].label.toLowerCase() + ". Paste a link or some text, and I'll read it to you.");
+    applyVoice(u, i);
+    window.speechSynthesis.speak(u);
+  }
+
+  function applyVoice(u, i){
+    var opt = voiceOptions[i] || voiceOptions[0];
+    if(opt){
+      if(opt.voice) u.voice = opt.voice;
+      u.pitch = opt.pitch || 1;
+    }
+    u.rate = parseFloat(rateSel.value) || 1;
+  }
+
+  /* ---------- Chunked playback (handles long, 15-min-plus reads) ---------- */
+  function chunkText(t){
+    var clean = t.replace(/\s+/g, " ").trim();
+    var sents = clean.match(/[^.!?]+[.!?]+["'”’)\]]*\s*/g) || [clean];
+    var chunks = [], cur = "";
+    for(var i = 0; i < sents.length; i++){
+      var s = sents[i];
+      if((cur + s).length > 200){
+        if(cur.trim()) chunks.push(cur.trim());
+        while(s.length > 200){ chunks.push(s.slice(0, 200).trim()); s = s.slice(200); }
+        cur = s;
+      } else {
+        cur += s;
+      }
+    }
+    if(cur.trim()) chunks.push(cur.trim());
+    return chunks.length ? chunks : [clean];
+  }
+
+  function startFromUI(){
+    var t = sourceText.trim();
+    if(!t){
+      setStatus("Fetch a link or paste some text first.", "err");
+      metaEl.textContent = "Fetch a link or paste some text first.";
+      return;
+    }
+    if(player.playing && player.paused){ resumePlayback(); return; }
+    startPlayback(t);
+  }
+
+  function startPlayback(text){
+    window.speechSynthesis.cancel();
+    player.chunks = chunkText(text);
+    player.i = 0;
+    player.playing = true;
+    player.paused = false;
+    setControls();
+    speakNext();
+  }
+
+  function speakNext(){
+    if(!player.playing) return;
+    if(player.i >= player.chunks.length){ finishPlayback(); return; }
+    var c = player.chunks[player.i];
+    var u = new SpeechSynthesisUtterance(c);
+    applyVoice(u, sel);
+    u.onend = function(){
+      if(!player.playing || player.paused) return;
+      player.i++;
+      updateProgress();
+      speakNext();
+    };
+    u.onerror = function(e){
+      if(!player.playing) return;
+      if(e && (e.error === "canceled" || e.error === "interrupted")) return;
+      player.i++;
+      updateProgress();
+      speakNext();
+    };
+    window.speechSynthesis.speak(u);
+    nowEl.textContent = c.length > 160 ? c.slice(0, 160) + "…" : c;
+    updateProgress();
+  }
+
+  function pausePlayback(){
+    if(!player.playing) return;
+    window.speechSynthesis.pause();
+    player.paused = true;
+    setControls();
+  }
+
+  function resumePlayback(){
+    if(!player.playing) return;
+    window.speechSynthesis.resume();
+    player.paused = false;
+    setControls();
+    if(!window.speechSynthesis.speaking){ speakNext(); }
+  }
+
+  function stopPlayback(){
+    player.playing = false;
+    player.paused = false;
+    player.chunks = [];
+    player.i = 0;
+    if("speechSynthesis" in window) window.speechSynthesis.cancel();
+    setControls();
+    progFill.style.width = "0%";
+    progLabel.textContent = "";
+    nowEl.textContent = "";
+  }
+
+  function finishPlayback(){
+    player.playing = false;
+    player.paused = false;
+    setControls();
+    progFill.style.width = "100%";
+    progLabel.textContent = "Finished.";
+    nowEl.textContent = "";
+  }
+
+  function updateProgress(){
+    var n = player.chunks.length;
+    if(!n){ progFill.style.width = "0%"; progLabel.textContent = ""; return; }
+    progFill.style.width = Math.round((player.i / n) * 100) + "%";
+    progLabel.textContent = "Part " + Math.min(player.i + 1, n) + " of " + n;
+  }
+
+  function setControls(){
+    playBtn.disabled = player.playing && !player.paused;
+    playBtn.innerHTML = player.paused ? "▶ Resume" : "▶ Play";
+    pauseBtn.disabled = !player.playing || player.paused;
+    stopBtn.disabled = !player.playing;
+  }
+
+  playBtn.addEventListener("click", startFromUI);
+  pauseBtn.addEventListener("click", pausePlayback);
+  stopBtn.addEventListener("click", stopPlayback);
+
+  /* Chrome can stall on long sessions — a periodic resume keeps the queue alive. */
+  setInterval(function(){
+    if(player.playing && !player.paused && window.speechSynthesis.speaking){
+      window.speechSynthesis.resume();
+    }
+  }, 8000);
+
+  /* ---------- Init ---------- */
+  buildVoices();
+  if("speechSynthesis" in window){
+    window.speechSynthesis.onvoiceschanged = buildVoices;
+  }
+})();
+</script>
+</body>
+</html>
