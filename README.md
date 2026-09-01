@@ -17,6 +17,10 @@ A single-file static site (`index.html`) that turns articles and text into speec
 - Play / pause / resume / stop with progress tracking
 - Handles long reads (15+ minutes) via chunked playback
 
+## Status
+
+Live and auto-deployed from this repository. Custom domain: narrately.net.
+
 ## Privacy
 
 All speech synthesis happens on the user's device. Article fetching goes through public reader/proxy services; no data is logged or retained by this site.
