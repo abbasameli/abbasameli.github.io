@@ -128,6 +128,7 @@
 
     <div class="section-label">Choose a voice</div>
     <div class="voices" id="voiceRow"></div>
+    <div class="hint">Natural neural voices, generated entirely on your device — nothing you paste ever leaves your browser. First use downloads the voice model (about 90&ndash;330&nbsp;MB depending on your device); after that it&rsquo;s cached and instant.</div>
 
     <div class="section-label">Speed</div>
     <select id="rateSel">
@@ -169,9 +170,6 @@
   var progFill=$("#progFill"), progLabel=$("#progLabel"), nowEl=$("#now");
 
   var sourceText = "";
-  var voiceOptions = [];
-  var sel = 0;
-  var player = { chunks: [], i: 0, playing: false, paused: false };
 
   /* ---------- Tabs ---------- */
   tabUrl.addEventListener("click", function(){ setTab(true); });
@@ -366,46 +364,31 @@
     return { title: title, text: text };
   }
 
-  /* ---------- Voices ---------- */
-  function scoreVoice(v){
-    var s = 0, n = v.name || "";
-    if(/google/i.test(n)) s += 4;
-    if(/natural|neural|online/i.test(n)) s += 4;
-    if(/microsoft/i.test(n)) s += 2;
-    if(/samantha|aria|jenny|guy|zira|serena|daniel|karen|moira|tessa|alex|susan|kate|stephanie|siri|ava|sonia|libby/i.test(n)) s += 2;
-    if(v.localService) s += 1;
-    return s;
-  }
+  /* ================= Voices: on-device neural engine (Kokoro) =================
+   * Natural-sounding neural TTS generated entirely in the browser.
+   * Model: Kokoro-82M (open weights), loaded once from CDN and cached.
+   * WebGPU devices get full fp32 quality; everything else gets quantized WASM.
+   * If the engine cannot load at all, we fall back to device voices.
+   */
+  var KOKORO_VOICES = [
+    { id: "af_heart",   label: "Heart",   sub: "American · female · warm" },
+    { id: "af_bella",   label: "Bella",   sub: "American · female · bright" },
+    { id: "am_michael", label: "Michael", sub: "American · male · clear" },
+    { id: "am_adam",    label: "Adam",    sub: "American · male · deep" },
+    { id: "bf_emma",    label: "Emma",    sub: "British · female" },
+    { id: "bm_george",  label: "George",  sub: "British · male" }
+  ];
+  var KOKORO_MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
+  var KOKORO_CDN = "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1";
 
-  function buildVoices(){
-    if(!("speechSynthesis" in window)){
-      voiceRow.innerHTML = "<p style='grid-column:1/-1;color:#b91c1c;font-size:14px;'>Sorry — this browser doesn't support speech synthesis. Try Chrome, Edge, or Safari.</p>";
-      return;
-    }
-    var all = window.speechSynthesis.getVoices() || [];
-    var en = all.filter(function(v){ return /^en([-_]|$)/i.test(v.lang); });
-    var pool = (en.length ? en : all).slice().sort(function(a,b){ return scoreVoice(b) - scoreVoice(a); });
-    var seen = {}, picked = [];
-    for(var i = 0; i < pool.length && picked.length < 3; i++){
-      if(seen[pool[i].name]) continue;
-      seen[pool[i].name] = true;
-      picked.push(pool[i]);
-    }
-    voiceOptions = picked.map(function(v, i){
-      return { voice: v, pitch: 1, label: "Voice " + (i + 1), sub: v.name.replace(/^(Microsoft|Google)\s+/i, "") };
-    });
-    var pitches = [1, 0.85, 1.2];
-    var tones = ["natural tone", "deeper tone", "brighter tone"];
-    while(voiceOptions.length < 3){
-      var idx = voiceOptions.length;
-      var base = picked[0] || null;
-      voiceOptions.push({
-        voice: base, pitch: pitches[idx] || 1, label: "Voice " + (idx + 1),
-        sub: base ? base.name.replace(/^(Microsoft|Google)\s+/i, "") + " · " + tones[idx] : "Device default"
-      });
-    }
-    renderVoiceCards();
-  }
+  var engine = { mode: "neural", tts: null, loading: null };
+  var voiceOptions = KOKORO_VOICES.slice();
+  var sel = 0;
+
+  var player = {
+    chunks: [], i: 0, playing: false, paused: false,
+    ctx: null, src: null, nextStart: 0, session: 0, cache: {}
+  };
 
   function renderVoiceCards(){
     voiceRow.innerHTML = "";
@@ -425,20 +408,75 @@
     });
   }
 
-  function previewVoice(i){
-    stopPlayback();
-    var u = new SpeechSynthesisUtterance("Hello — this is " + voiceOptions[i].label.toLowerCase() + ". Paste a link or some text, and I'll read it to you.");
-    applyVoice(u, i);
-    window.speechSynthesis.speak(u);
+  /* Lazy-load the model on first use, with visible download progress. */
+  function loadEngine(){
+    if(engine.tts) return Promise.resolve(engine.tts);
+    if(engine.loading) return engine.loading;
+    setProg("Loading voice engine…");
+    engine.loading = import(KOKORO_CDN).then(function(mod){
+      var KokoroTTS = mod.KokoroTTS;
+      return detectWebGPU().then(function(hasRealGPU){
+        var tries = [];
+        if(hasRealGPU) tries.push({ device: "webgpu", dtype: "fp32" });
+        tries.push({ device: "wasm", dtype: "q8" });
+        return { KokoroTTS: KokoroTTS, tries: tries };
+      });
+    }).then(function(ctx){
+      var KokoroTTS = ctx.KokoroTTS, tries = ctx.tries;
+      var attempt = function(n){
+        if(n >= tries.length) throw new Error("engine load failed");
+        setProg(tries[n].device === "webgpu" ? "Loading voice engine (GPU)…" : "Loading voice engine…");
+        return KokoroTTS.from_pretrained(KOKORO_MODEL, {
+          device: tries[n].device,
+          dtype: tries[n].dtype,
+          progress_callback: function(p){
+            if(p && p.status === "progress" && typeof p.progress === "number"){
+              setProg("Downloading voice model — " + Math.round(p.progress) + "% (one-time, then cached)");
+            }
+          }
+        }).catch(function(){ return attempt(n + 1); });
+      };
+      return attempt(0);
+    }).then(function(model){
+      engine.tts = model;
+      setProg("");
+      return model;
+    }).catch(function(err){
+      engine.loading = null;
+      throw err;
+    });
+    return engine.loading;
   }
 
-  function applyVoice(u, i){
-    var opt = voiceOptions[i] || voiceOptions[0];
-    if(opt){
-      if(opt.voice) u.voice = opt.voice;
-      u.pitch = opt.pitch || 1;
+  /* WebGPU exists in headless/software setups (SwiftShader) where generation hangs.
+   * Only trust it when a hardware adapter answers. */
+  function detectWebGPU(){
+    if(!("gpu" in navigator)) return Promise.resolve(false);
+    var req;
+    try { req = navigator.gpu.requestAdapter(); } catch(e){ return Promise.resolve(false); }
+    var timeout = new Promise(function(res){ setTimeout(function(){ res(null); }, 3000); });
+    return Promise.race([req, timeout]).then(function(adapter){
+      if(!adapter) return false;
+      if(adapter.isFallbackAdapter) return false;
+      var info = adapter.info || {};
+      var desc = ((info.vendor || "") + " " + (info.architecture || "") + " " + (info.description || "")).toLowerCase();
+      if(/swiftshader|llvmpipe|software/.test(desc)) return false;
+      return true;
+    }).catch(function(){ return false; });
+  }
+
+  function currentVoice(){ return voiceOptions[sel] || voiceOptions[0]; }
+  function currentRate(){ return parseFloat(rateSel.value) || 1; }
+
+  function audioCtx(){
+    if(!player.ctx){
+      var AC = window.AudioContext || window.webkitAudioContext;
+      player.ctx = new AC();
     }
-    u.rate = parseFloat(rateSel.value) || 1;
+    if(player.ctx.state === "suspended" && !player.paused){
+      player.ctx.resume().catch(function(){});
+    }
+    return player.ctx;
   }
 
   /* ---------- Chunked playback (handles long, 15-min-plus reads) ---------- */
@@ -448,9 +486,9 @@
     var chunks = [], cur = "";
     for(var i = 0; i < sents.length; i++){
       var s = sents[i];
-      if((cur + s).length > 200){
+      if((cur + s).length > 300){
         if(cur.trim()) chunks.push(cur.trim());
-        while(s.length > 200){ chunks.push(s.slice(0, 200).trim()); s = s.slice(200); }
+        while(s.length > 300){ chunks.push(s.slice(0, 300).trim()); s = s.slice(300); }
         cur = s;
       } else {
         cur += s;
@@ -458,6 +496,51 @@
     }
     if(cur.trim()) chunks.push(cur.trim());
     return chunks.length ? chunks : [clean];
+  }
+
+  /* Generate a chunk (or return the in-flight promise), caching briefly. */
+  function genChunk(session, idx){
+    var key = session + ":" + idx;
+    if(player.cache[key]) return player.cache[key];
+    var p = engine.tts.generate(player.chunks[idx], {
+      voice: currentVoice().id,
+      speed: currentRate()
+    });
+    player.cache[key] = p;
+    return p;
+  }
+
+  function dropCache(session){
+    Object.keys(player.cache).forEach(function(k){
+      if(k.indexOf(session + ":") === 0) delete player.cache[k];
+    });
+  }
+
+  function playBuffer(audio, session){
+    return new Promise(function(resolve){
+      var ctx = audioCtx();
+      if(ctx.state === "suspended") ctx.resume().catch(function(){});
+      var buf = ctx.createBuffer(1, audio.audio.length, audio.sampling_rate);
+      buf.getChannelData(0).set(audio.audio);
+      var src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.onended = function(){ resolve(); };
+      player.src = src;
+      var startAt = Math.max(ctx.currentTime + 0.03, player.nextStart);
+      src.start(startAt);
+      player.nextStart = startAt + buf.duration;
+    });
+  }
+
+  function waitWhilePaused(session){
+    return new Promise(function(resolve){
+      (function poll(){
+        if(!player.playing || session !== player.session){ resolve(false); return; }
+        if(!player.paused){ resolve(true); return; }
+        setTimeout(poll, 150);
+      })();
+    });
   }
 
   function startFromUI(){
@@ -468,67 +551,138 @@
       return;
     }
     if(player.playing && player.paused){ resumePlayback(); return; }
+    if(engine.mode === "device"){ startDevicePlayback(t); return; }
     startPlayback(t);
   }
 
   function startPlayback(text){
-    window.speechSynthesis.cancel();
+    stopPlayback();
+    /* Create/resume the AudioContext inside the click gesture (autoplay policy). */
+    if(engine.mode !== "device") audioCtx();
     player.chunks = chunkText(text);
     player.i = 0;
     player.playing = true;
     player.paused = false;
+    player.session++;
+    player.nextStart = 0;
+    var session = player.session;
     setControls();
-    speakNext();
+    setProg("Loading voice engine…");
+    loadEngine().then(function(){
+      if(!player.playing || session !== player.session) return;
+      runNeuralLoop(session);
+    }).catch(function(){
+      if(session !== player.session) return;
+      /* Neural engine unavailable — swap to device voices permanently. */
+      switchToDeviceMode();
+      if(player.playing){
+        var t = sourceText.trim();
+        if(t) startDevicePlayback(t);
+      }
+    });
   }
 
-  function speakNext(){
-    if(!player.playing) return;
-    if(player.i >= player.chunks.length){ finishPlayback(); return; }
-    var c = player.chunks[player.i];
-    var u = new SpeechSynthesisUtterance(c);
-    applyVoice(u, sel);
-    u.onend = function(){
-      if(!player.playing || player.paused) return;
-      player.i++;
-      updateProgress();
-      speakNext();
-    };
-    u.onerror = function(e){
-      if(!player.playing) return;
-      if(e && (e.error === "canceled" || e.error === "interrupted")) return;
-      player.i++;
-      updateProgress();
-      speakNext();
-    };
-    window.speechSynthesis.speak(u);
-    nowEl.textContent = c.length > 160 ? c.slice(0, 160) + "…" : c;
+  function runNeuralLoop(session){
+    var n = player.chunks.length;
     updateProgress();
+    (function step(){
+      if(!player.playing || session !== player.session) return;
+      if(player.i >= n){ finishPlayback(); return; }
+      var idx = player.i;
+      /* prefetch ahead while this one plays */
+      if(idx + 1 < n) genChunk(session, idx + 1);
+      setProg("Preparing part " + (idx + 1) + " of " + n + "…");
+      genChunk(session, idx).then(function(audio){
+        if(!player.playing || session !== player.session) return;
+        delete player.cache[session + ":" + idx];
+        nowEl.textContent = player.chunks[idx].length > 160
+          ? player.chunks[idx].slice(0, 160) + "…"
+          : player.chunks[idx];
+        updateProgress();
+        if(idx + 2 < n) genChunk(session, idx + 2);
+        return waitWhilePaused(session).then(function(ok){
+          if(!ok) return;
+          return playBuffer(audio, session);
+        });
+      }).then(function(){
+        if(!player.playing || session !== player.session) return;
+        player.i++;
+        updateProgress();
+        step();
+      }).catch(function(err){
+        if(!player.playing || session !== player.session) return;
+        /* skip a chunk that failed to generate rather than stalling */
+        console.error("chunk", idx, "failed:", err);
+        player.i++;
+        step();
+      });
+    })();
+  }
+
+  function previewVoice(i){
+    stopPlayback();
+    audioCtx();
+    setProg("Loading voice engine…");
+    loadEngine().then(function(){
+      var v = voiceOptions[i];
+      setProg("Generating preview…");
+      return engine.tts.generate(
+        "Hello — this is " + v.label + ". Paste a link or some text, and I'll read it to you.",
+        { voice: v.id, speed: 1 }
+      );
+    }).then(function(audio){
+      if(!audio) return;
+      setProg("");
+      var sess = ++player.session;
+      player.playing = true; player.paused = false;
+      playBuffer(audio, sess).then(function(){
+        if(player.session === sess){ player.playing = false; setControls(); }
+      });
+      setControls();
+    }).catch(function(){
+      setProg("");
+      switchToDeviceMode();
+      previewDeviceVoice(0);
+    });
   }
 
   function pausePlayback(){
     if(!player.playing) return;
-    window.speechSynthesis.pause();
     player.paused = true;
+    if(engine.mode === "device"){
+      if("speechSynthesis" in window) window.speechSynthesis.pause();
+    } else if(player.ctx){
+      player.ctx.suspend().catch(function(){});
+    }
     setControls();
   }
 
   function resumePlayback(){
     if(!player.playing) return;
-    window.speechSynthesis.resume();
     player.paused = false;
+    if(engine.mode === "device"){
+      if("speechSynthesis" in window){
+        window.speechSynthesis.resume();
+        if(!window.speechSynthesis.speaking) speakNextDevice();
+      }
+    } else if(player.ctx){
+      player.ctx.resume().catch(function(){});
+    }
     setControls();
-    if(!window.speechSynthesis.speaking){ speakNext(); }
   }
 
   function stopPlayback(){
     player.playing = false;
     player.paused = false;
+    player.session++;
     player.chunks = [];
     player.i = 0;
+    player.nextStart = 0;
+    if(player.src){ try { player.src.onended = null; player.src.stop(); } catch(e){} player.src = null; }
     if("speechSynthesis" in window) window.speechSynthesis.cancel();
     setControls();
     progFill.style.width = "0%";
-    progLabel.textContent = "";
+    setProg("");
     nowEl.textContent = "";
   }
 
@@ -537,16 +691,18 @@
     player.paused = false;
     setControls();
     progFill.style.width = "100%";
-    progLabel.textContent = "Finished.";
+    setProg("Finished.");
     nowEl.textContent = "";
   }
 
   function updateProgress(){
     var n = player.chunks.length;
-    if(!n){ progFill.style.width = "0%"; progLabel.textContent = ""; return; }
+    if(!n){ progFill.style.width = "0%"; setProg(""); return; }
     progFill.style.width = Math.round((player.i / n) * 100) + "%";
-    progLabel.textContent = "Part " + Math.min(player.i + 1, n) + " of " + n;
+    setProg("Part " + Math.min(player.i + 1, n) + " of " + n);
   }
+
+  function setProg(msg){ progLabel.textContent = msg || ""; }
 
   function setControls(){
     playBtn.disabled = player.playing && !player.paused;
@@ -559,18 +715,96 @@
   pauseBtn.addEventListener("click", pausePlayback);
   stopBtn.addEventListener("click", stopPlayback);
 
-  /* Chrome can stall on long sessions — a periodic resume keeps the queue alive. */
+  /* ================= Device-voice fallback (only if neural fails) ================= */
+  function scoreVoice(v){
+    var s = 0, n = v.name || "";
+    if(/google/i.test(n)) s += 4;
+    if(/natural|neural|online/i.test(n)) s += 4;
+    if(/microsoft/i.test(n)) s += 2;
+    if(/samantha|aria|jenny|guy|zira|serena|daniel|karen|moira|tessa|alex|susan|kate|stephanie|siri|ava|sonia|libby/i.test(n)) s += 2;
+    if(v.localService) s += 1;
+    return s;
+  }
+
+  function switchToDeviceMode(){
+    if(engine.mode === "device") return;
+    engine.mode = "device";
+    if(!("speechSynthesis" in window)){
+      voiceRow.innerHTML = "<p style='grid-column:1/-1;color:#b91c1c;font-size:14px;'>Sorry — this browser supports neither the neural voice engine nor device speech. Try Chrome, Edge, or Safari.</p>";
+      return;
+    }
+    var all = window.speechSynthesis.getVoices() || [];
+    var en = all.filter(function(v){ return /^en([-_]|$)/i.test(v.lang); });
+    var pool = (en.length ? en : all).slice().sort(function(a,b){ return scoreVoice(b) - scoreVoice(a); });
+    var seen = {}, picked = [];
+    for(var i = 0; i < pool.length && picked.length < 3; i++){
+      if(seen[pool[i].name]) continue;
+      seen[pool[i].name] = true;
+      picked.push(pool[i]);
+    }
+    voiceOptions = picked.map(function(v, i){
+      return { voice: v, label: "Voice " + (i + 1), sub: v.name.replace(/^(Microsoft|Google)\s+/i, "") };
+    });
+    while(voiceOptions.length < 3){
+      var idx = voiceOptions.length;
+      voiceOptions.push({ voice: picked[0] || null, label: "Voice " + (idx + 1), sub: "Device default" });
+    }
+    sel = 0;
+    renderVoiceCards();
+    metaEl.textContent = "The neural voice engine couldn't load on this browser, so device voices are being used instead.";
+  }
+
+  function previewDeviceVoice(i){
+    stopPlayback();
+    var opt = voiceOptions[i] || voiceOptions[0];
+    var u = new SpeechSynthesisUtterance("Hello — this is " + (opt.label || "the device voice") + ". Paste a link or some text, and I'll read it to you.");
+    if(opt && opt.voice) u.voice = opt.voice;
+    u.rate = currentRate();
+    window.speechSynthesis.speak(u);
+  }
+
+  function startDevicePlayback(text){
+    window.speechSynthesis.cancel();
+    player.chunks = chunkText(text);
+    player.i = 0;
+    player.playing = true;
+    player.paused = false;
+    setControls();
+    speakNextDevice();
+  }
+
+  function speakNextDevice(){
+    if(!player.playing) return;
+    if(player.i >= player.chunks.length){ finishPlayback(); return; }
+    var c = player.chunks[player.i];
+    var u = new SpeechSynthesisUtterance(c);
+    var opt = voiceOptions[sel] || voiceOptions[0];
+    if(opt && opt.voice) u.voice = opt.voice;
+    u.rate = currentRate();
+    u.onend = function(){
+      if(!player.playing || player.paused) return;
+      player.i++; updateProgress(); speakNextDevice();
+    };
+    u.onerror = function(e){
+      if(!player.playing) return;
+      if(e && (e.error === "canceled" || e.error === "interrupted")) return;
+      player.i++; updateProgress(); speakNextDevice();
+    };
+    window.speechSynthesis.speak(u);
+    nowEl.textContent = c.length > 160 ? c.slice(0, 160) + "…" : c;
+    updateProgress();
+  }
+
+  /* Chrome can stall on long device-voice sessions — keep the queue alive. */
   setInterval(function(){
-    if(player.playing && !player.paused && window.speechSynthesis.speaking){
+    if(engine.mode === "device" && player.playing && !player.paused &&
+       "speechSynthesis" in window && window.speechSynthesis.speaking){
       window.speechSynthesis.resume();
     }
   }, 8000);
 
   /* ---------- Init ---------- */
-  buildVoices();
-  if("speechSynthesis" in window){
-    window.speechSynthesis.onvoiceschanged = buildVoices;
-  }
+  renderVoiceCards();
 })();
 </script>
 </body>
